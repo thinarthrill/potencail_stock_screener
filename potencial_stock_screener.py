@@ -100,11 +100,11 @@ try:
                 "source": "SPAC",
                 "link": "https://www.spacinsider.com/stats/"
             })
-            existing_tickers.add(ticker)
+            existing.add(ticker)
 
     if new_data:
         df_all = pd.concat([df_old, pd.DataFrame(new_data)], ignore_index=True)
-        df_all.to_csv(CSV_FILE, index=False)
+        df_all.to_csv(PORTFOLIO_FILE, index=False)
         print(f"✅ Добавлено SPAC тикеров: {len(new_data)}")
     else:
         print("ℹ️ Новых SPAC тикеров не найдено.")
