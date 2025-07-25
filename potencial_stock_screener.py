@@ -83,38 +83,34 @@ for query in queries:
                   "link": link
                 })
 # === 2. 🚀 SPACInsider ===
-try:
-    spac_url = "https://www.spacinsider.com/stats/"
-    response = requests.get(spac_url)
-    soup = BeautifulSoup(response.text, "lxml")
-    tables = soup.find_all("table")
+SPAC_FILE = "SPAC.csv"
+new_data = []
 
-    for table in tables:
-        if "Estimated Deadline" in table.text:
-            rows = table.find_all("tr")[1:]
-            for row in rows:
-                cols = row.find_all("td")
-                if len(cols) < 5:
-                    continue
-                ticker = cols[1].text.strip()
-                deadline_str = cols[-1].text.strip()
-                try:
-                    deadline = datetime.strptime(deadline_str, "%m/%d/%Y")
-                    days_left = (deadline - datetime.now()).days
-                    if 0 < days_left <= 120:
-                        if ticker not in existing:
-                            new_data.append({
-                                "ticker": ticker,
-                                "date": datetime.now().strftime("%Y-%m-%d"),
-                                "source": "SPAC",
-                                "link": spac_url
-                            })
-                            existing.add(key)
-                except:
-                    continue
-            break
+# Загрузка тикеров из SPAC.csv
+try:
+    df_spac = pd.read_csv(SPAC_FILE)
+    tickers = df_spac["Company"].dropna().unique()
+
+    for ticker in tickers:
+        ticker = ticker.strip().upper()
+        if ticker not in existing:
+            new_data.append({
+                "ticker": ticker,
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "source": "SPAC",
+                "link": "https://www.spacinsider.com/stats/"
+            })
+            existing_tickers.add(ticker)
+
+    if new_data:
+        df_all = pd.concat([df_old, pd.DataFrame(new_data)], ignore_index=True)
+        df_all.to_csv(CSV_FILE, index=False)
+        print(f"✅ Добавлено SPAC тикеров: {len(new_data)}")
+    else:
+        print("ℹ️ Новых SPAC тикеров не найдено.")
+
 except Exception as e:
-    print(f"⚠️ Ошибка SPAC: {e}")
+    print(f"⚠️ Ошибка загрузки SPAC из файла: {e}")
 
 # === 3. 💊 FDA Calendar (из fda_updated.csv) ===
 try:
