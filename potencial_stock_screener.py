@@ -35,16 +35,19 @@ SPAC_FILE="InsiderPulseDB/SPAC.csv"
 FDA_CALENDAR="InsiderPulseDB/fda_calendar.csv"
 
 def init_gcs_client():
-    key_dict = GCS_KEY_JSON
-    if not key_dict:
+    key_str = os.getenv("GCS_KEY_JSON")
+    if not key_str:
         raise ValueError("❌ GCS_KEY_JSON не установлена или пуста")
 
+    # Преобразуем строку из .env обратно в словарь
+    key_dict = json.loads(key_str)
+
+    # Сохраняем как файл
     with open("gcs_key.json", "w") as f:
-        f.write(json.dumps(key_dict))  # ✅ serialize to JSON string
+        json.dump(key_dict, f)
 
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcs_key.json"
     return storage.Client()
-
 
 def download_from_gcs(bucket_name, gcs_path, local_path):
     client = init_gcs_client()
