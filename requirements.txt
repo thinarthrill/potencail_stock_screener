@@ -6,4 +6,3 @@ beautifulsoup4
 lxml
 dotenv
 google-cloud-storage
-os
