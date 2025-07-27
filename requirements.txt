@@ -7,3 +7,4 @@ lxml
 dotenv
 google-cloud-storage
 json
+os

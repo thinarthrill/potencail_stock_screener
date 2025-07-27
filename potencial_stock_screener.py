@@ -26,9 +26,40 @@ CX = os.getenv("CX")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SIGNAL_CHANNEL = os.getenv("SIGNAL_CHANNEL")
 NEWS_CHANNEL = os.getenv("NEWS_CHANNEL")
-STOCK_FILE = os.getenv("STOCK_FILE")
-PORTFOLIO_FILE = os.getenv("PORTFOLIO_FILE")
-SIGNALS_FILE = os.getenv("SIGNALS_FILE")
+GCS_KEY_JSON = os.getenv("GCS_KEY_JSON")
+
+STOCK_FILE="InsiderPulseDB/Options_History.csv"
+PORTFOLIO_FILE="InsiderPulseDB/Stocks.csv"
+SIGNALS_FILE="InsiderPulseDB/active_signals.csv"
+SPAC_FILE="InsiderPulseDB/SPAC.csv"
+FDA_CALENDAR="InsiderPulseDB/fda_calendar.csv"
+
+def init_gcs_client():
+    key_dict = GCS_KEY_JSON
+    if not key_dict:
+        raise ValueError("❌ GCS_KEY_JSON не установлена или пуста")
+
+    with open("gcs_key.json", "w") as f:
+        f.write(json.dumps(key_dict))  # ✅ serialize to JSON string
+
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcs_key.json"
+    return storage.Client()
+
+
+def download_from_gcs(bucket_name, gcs_path, local_path):
+    client = init_gcs_client()
+    bucket = client.get_bucket(bucket_name)
+    blob = bucket.blob(gcs_path)
+    blob.download_to_filename(local_path)
+    print(f"📥 Загружено: {gcs_path} → {local_path}")
+
+def upload_to_gcs(local_file_path, bucket_name, gcs_filename):
+    client = init_gcs_client()
+    bucket = client.get_bucket(bucket_name)
+    blob = bucket.blob(gcs_filename)
+    blob.upload_from_filename(local_file_path)
+    print("📤 Файл загружен в GCS:", blob.public_url)
+    return blob.public_url
 
 # 📌 Поисковые запросы
 current_month = datetime.now().strftime("%B")
@@ -43,6 +74,7 @@ queries = [
 
 # 📥 Загрузка предыдущих данных, если есть
 try:
+    download_from_gcs(BUCKET, PORTFOLIO_FILE, PORTFOLIO_FILE)
     df_old = pd.read_csv(PORTFOLIO_FILE)
 except FileNotFoundError:
     df_old = pd.DataFrame(columns=["ticker", "date", "source", "link"])
@@ -82,12 +114,12 @@ for query in queries:
                   "source": source,
                   "link": link
                 })
+
 # === 2. 🚀 SPACInsider ===
-SPAC_FILE = "SPAC.csv"
-new_data = []
 
 # Загрузка тикеров из SPAC.csv
 try:
+    download_from_gcs(BUCKET, SPAC_FILE, SPAC_FILE)
     df_spac = pd.read_csv(SPAC_FILE)
     tickers = df_spac["Company"].dropna().unique()
 
@@ -105,6 +137,7 @@ try:
     if new_data:
         df_all = pd.concat([df_old, pd.DataFrame(new_data)], ignore_index=True)
         df_all.to_csv(PORTFOLIO_FILE, index=False)
+        upload_to_gcs(PORTFOLIO_FILE, BUCKET, PORTFOLIO_FILE)
         print(f"✅ Добавлено SPAC тикеров: {len(new_data)}")
     else:
         print("ℹ️ Новых SPAC тикеров не найдено.")
@@ -114,7 +147,8 @@ except Exception as e:
 
 # === 3. 💊 FDA Calendar (из fda_updated.csv) ===
 try:
-    fda_df = pd.read_csv("fda_calendar.csv")
+    download_from_gcs(BUCKET, FDA_CALENDAR, FDA_CALENDAR)
+    fda_df = pd.read_csv(FDA_CALENDAR)
     fda_df["Catalyst Date"] = pd.to_datetime(fda_df["Catalyst Date"], errors="coerce")
 
     for _, row in fda_df.iterrows():
@@ -140,21 +174,22 @@ if new_data:
     df_new = pd.DataFrame(new_data)
     df_total = pd.concat([df_old, df_new], ignore_index=True)
     df_total.to_csv(PORTFOLIO_FILE, index=False)
+    upload_to_gcs(PORTFOLIO_FILE, BUCKET, PORTFOLIO_FILE)
     print(f"✅ Сохранено новых записей: {len(new_data)}")
 else:
     print("ℹ️ Нет новых тикеров для добавления.")
 
-# === Загрузка API ключа
+# === Дней до новости
 TARGET_DAYS = 20
 
 def is_liquid_stock(symbol, api_key, min_market_cap=1):
     """Фильтрует по капитализации и бирже"""
     url = f"https://finnhub.io/api/v1/stock/profile2?symbol={symbol}&token={api_key}"
     try:
-        res = requests.get(url,timeout=5).json()
+        res = requests.get(url).json()
         market_cap = res.get("marketCapitalization", 0)
         exchange = res.get("exchange", "")
-        print(f"⚠️ {symbol}: кап={market_cap} < {min_market_cap} exc {exchange}")
+        #print(f"⚠️ {symbol}: кап={market_cap} < {min_market_cap} exc {exchange}")
         if market_cap and market_cap >= min_market_cap and exchange in ["NASDAQ NMS - GLOBAL MARKET", "NEW YORK STOCK EXCHANGE, INC."]:
             return True
     except:
@@ -175,7 +210,6 @@ future = today + timedelta(days=TARGET_DAYS)
 
 # === Запрос к Finnhub
 url = f"https://finnhub.io/api/v1/calendar/earnings?from={today}&to={future}&token={FINNHUB_API_KEY}"
-print(url)
 try:
     response = requests.get(url)
     earnings_data = response.json().get("earningsCalendar", [])
@@ -196,7 +230,7 @@ for item in earnings_data:
         report_date = datetime.strptime(report_date_str, "%Y-%m-%d").date()
     except:
         continue
-    print(f"🔎 {symbol} — отчётность: {report_date} | В интервале? ", end="\n")
+    #print(f"🔎 {symbol} — отчётность: {report_date} | В интервале? ", end="\n")
     if not (today <= report_date <= future):
         continue
 
@@ -213,29 +247,25 @@ if records:
     df_new = pd.DataFrame(records)
     df_result = pd.concat([df_existing, df_new], ignore_index=True)
     df_result.to_csv(PORTFOLIO_FILE, index=False)
+    upload_to_gcs(PORTFOLIO_FILE, BUCKET, PORTFOLIO_FILE)
     print(f"✅ Добавлено {len(df_new)} новых тикеров.")
 else:
     print("ℹ️ Новых тикеров с ожидаемой отчетностью не найдено.")
 
-import pandas as pd
-from datetime import datetime
 import yfinance as yf
-
-# === Путь к файлам ===
-tickers_csv = "Stocks.csv"
-options_csv = "Options_History.csv"
 
 # === Загружаем тикеры ===
 try:
-    df_tickers = pd.read_csv(tickers_csv)
+    df_tickers = pd.read_csv(PORTFOLIO_FILE)
     tickers = df_tickers["ticker"].dropna().unique().tolist()
 except Exception as e:
     print(f"Ошибка загрузки тикеров: {e}")
     tickers = []
 
-print("# === Загружаем историю опционов (если есть) ===")
-if os.path.exists(options_csv):
-    df_history = pd.read_csv(options_csv)
+# === Загружаем историю опционов (если есть) ===
+download_from_gcs(BUCKET, STOCK_FILE, STOCK_FILE)
+if os.path.exists(STOCK_FILE):
+    df_history = pd.read_csv(STOCK_FILE)
 else:
     df_history = pd.DataFrame(columns=[
         "date", "ticker", "call_volume", "put_volume",
@@ -246,7 +276,7 @@ today = datetime.now().strftime("%Y-%m-%d")
 existing_keys = set(zip(df_history["date"], df_history["ticker"]))
 new_data = []
 
-print("# === Получаем опционные данные для каждого тикера ===")
+# === Получаем опционные данные для каждого тикера ===
 for ticker in tickers:
     key = (today, ticker)
     if key in existing_keys:
@@ -281,22 +311,19 @@ for ticker in tickers:
     except Exception as e:
         print(f"⚠️ Ошибка по {ticker}: {e}")
 
-print("# === Сохраняем данные ===")
+# === Сохраняем данные ===
 if new_data:
     df_new = pd.DataFrame(new_data)
     df_full = pd.concat([df_history, df_new], ignore_index=True)
-    df_full.to_csv(options_csv, index=False)
-    print(f"\n✅ Добавлено записей: {len(df_new)} → сохранено в {options_csv}")
+    df_full.to_csv(STOCK_FILE, index=False)
+    upload_to_gcs(STOCK_FILE, BUCKET, STOCK_FILE)
+    print(f"\n✅ Добавлено записей: {len(df_new)} → сохранено в {STOCK_FILE}")
 else:
     print("ℹ️ Нет новых данных для записи.")
 
-import pandas as pd
-import requests
 import uuid
-from datetime import datetime, timedelta
-import yfinance as yf
 
-print("# === Telegram отправка")
+# === Telegram отправка
 def send_telegram_message(text, chat_id, reply_to=None):
     payload = {
         "chat_id": chat_id,
@@ -320,16 +347,18 @@ def forward_telegram_message(from_chat_id, message_id, to_chat_id):
 
 # === Чтение и очистка старых сигналов
 def load_signals():
+    download_from_gcs(BUCKET, SIGNALS_FILE, SIGNALS_FILE)
     if os.path.exists(SIGNALS_FILE):
         df = pd.read_csv(SIGNALS_FILE)
         df["date_sent"] = pd.to_datetime(df["date_sent"], errors='coerce')
-        df["last_checked"] = pd.to_datetime(df["last_checked"], errors='coerce')
+        df["last_checked"] = pd.to_datetime(df["last_checked"])
         return df
     else:
         return pd.DataFrame(columns=["id", "ticker", "date_sent", "signal_type", "price_entry", "max_profit", "last_checked", "signal_url"])
 
 def save_signals(df):
     df.to_csv(SIGNALS_FILE, index=False)
+    upload_to_gcs(SIGNALS_FILE, BUCKET, SIGNALS_FILE)
 
 # === Отправка сигналов
 def compute_signals(df, window_days=5, min_vol=1000, min_oi=500, min_ratio=2):
@@ -434,6 +463,7 @@ def drop_from_csv(filepath, tickers, column="ticker"):
         df = pd.read_csv(filepath)
         df = df[~df[column].isin(tickers)]
         df.to_csv(filepath, index=False)
+        upload_to_gcs(filepath, BUCKET, filepath)
 
 def monitor_signals():
     if not os.path.exists(SIGNALS_FILE):
@@ -510,11 +540,9 @@ def monitor_signals():
         print(f"🧹 Удалены тикеры: {dropped}")
 
 # === Запуск
-print("Отправка сигналов при наличии")
 send_signals()
-print("Мониторинг сигналов с прибыльным PnL")
 monitor_signals()
 
-print("🎯 DONE")
+print("🎯 DONE ver. 2")
 
 
