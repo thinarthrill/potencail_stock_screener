@@ -36,6 +36,7 @@ SPAC_FILE="InsiderPulseDB/SPAC.csv"
 FDA_CALENDAR="InsiderPulseDB/fda_calendar.csv"
 
 def init_gcs_client():
+    print(GCS_KEY_JSON)
     key_dict = GCS_KEY_JSON
     if not key_dict:
         raise ValueError("❌ GCS_KEY_JSON не установлена или пуста")
