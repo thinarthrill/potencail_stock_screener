@@ -14,12 +14,11 @@ Original file is located at
 import requests
 import pandas as pd
 import re
-from datetime import datetime
 from bs4 import BeautifulSoup
 import os
 import json
-import requests
 from datetime import datetime, timedelta
+from google.cloud import storage
 
 FINNHUB_API_KEY=os.getenv("FINNHUB_API_KEY")
 API_KEY = os.getenv("API_KEY")
