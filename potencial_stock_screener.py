@@ -28,7 +28,7 @@ SIGNAL_CHANNEL = os.getenv("SIGNAL_CHANNEL")
 NEWS_CHANNEL = os.getenv("NEWS_CHANNEL")
 BUCKET = os.getenv("BUCKET")
 GCS_KEY_JSON = os.getenv("GCS_KEY_JSON")
-
+print(GCS_KEY_JSON)
 STOCK_FILE="InsiderPulseDB/Options_History.csv"
 PORTFOLIO_FILE="InsiderPulseDB/Stocks.csv"
 SIGNALS_FILE="InsiderPulseDB/active_signals.csv"
