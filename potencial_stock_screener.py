@@ -64,6 +64,9 @@ def upload_to_gcs(local_file_path, bucket_name, gcs_filename):
     print("📤 Файл загружен в GCS:", blob.public_url)
     return blob.public_url
 
+# === Создание директории, если не существует
+os.makedirs("InsiderPulseDB", exist_ok=True)
+
 # 📌 Поисковые запросы
 current_month = datetime.now().strftime("%B")
 current_year = datetime.now().year
