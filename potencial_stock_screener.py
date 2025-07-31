@@ -532,9 +532,30 @@ def monitor_signals():
 
                 row["max_profit"] = profit_pct
 
-            # === Условие 3: Прибыль падает → статус closed
+            # === Условие 3: Прибыль падает → статус closed + уведомление
             elif profit_pct < max_profit:
                 print(f"🛑 {ticker} — прибыль упала, переводим в closed")
+
+                # Сообщение в канал с сигналами
+                drop_msg = (
+                    f"⚠️ {ticker} — прибыль начала снижаться.\n"
+                    f"📈 Максимум был: +{max_profit:.2f}%\n"
+                    f"📉 Сейчас: {profit_pct:.2f}%\n"
+                    f"💡 Рекомендация: зафиксировать прибыль."
+                )
+                send_telegram_message(drop_msg, SIGNAL_CHANNEL, reply_to=message_id)
+
+                # Сообщение в новостной канал
+                news_msg = (
+                    f"⚠️ {ticker} — сигнал закрыт.\n"
+                    f"Максимальная прибыль: +{max_profit:.2f}%\n"
+                    f"Текущая прибыль: {profit_pct:.2f}%"
+                )
+                forward = forward_telegram_message(SIGNAL_CHANNEL, message_id, NEWS_CHANNEL)
+                if forward:
+                    forward_msg_id = forward["message_id"]
+                    send_telegram_message(news_msg, NEWS_CHANNEL, reply_to=forward_msg_id)
+
                 row["status"] = "closed"
 
             updated.append(row)
