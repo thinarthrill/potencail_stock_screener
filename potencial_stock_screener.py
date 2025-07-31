@@ -570,12 +570,6 @@ def monitor_signals():
 
     save_signals(final_df)
 
-    if dropped:
-        drop_from_csv(STOCK_FILE, dropped)
-        drop_from_csv(PORTFOLIO_FILE, dropped)
-        drop_from_csv(SIGNALS_FILE, dropped)
-        print(f"🧹 Удалены тикеры: {dropped}")
-
 # === Запуск
 send_signals()
 monitor_signals()
