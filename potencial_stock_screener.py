@@ -354,14 +354,21 @@ def forward_telegram_message(from_chat_id, message_id, to_chat_id):
 # === Чтение и очистка старых сигналов
 def load_signals():
     download_from_gcs(BUCKET, SIGNALS_FILE, SIGNALS_FILE)
-    if os.path.exists(SIGNALS_FILE):
+    if os.path.exists(SIGNALS_FILE) and os.path.getsize(SIGNALS_FILE) > 0:
         df = pd.read_csv(SIGNALS_FILE)
-        df["date_sent"] = pd.to_datetime(df["date_sent"], errors='coerce')
-        df["last_checked"] = pd.to_datetime(df["last_checked"])
-        return df
     else:
-        return pd.DataFrame(columns=["id", "ticker", "date_sent", "signal_type", "price_entry", "max_profit", "last_checked", "signal_url"])
+        df = pd.DataFrame(columns=["id", "ticker", "date_sent", "signal_type", "price_entry",
+                                   "max_profit", "last_checked", "signal_url", "message_id", "status"])
 
+    # Гарантируем, что колонка status есть
+    if "status" not in df.columns:
+        df["status"] = "active"
+
+    df["date_sent"] = pd.to_datetime(df["date_sent"], errors='coerce')
+    df["last_checked"] = pd.to_datetime(df["last_checked"], errors='coerce')
+    return df
+
+# === Сохранеие сигналов
 def save_signals(df):
     df.to_csv(SIGNALS_FILE, index=False)
     upload_to_gcs(SIGNALS_FILE, BUCKET, SIGNALS_FILE)
@@ -477,9 +484,11 @@ def monitor_signals():
 
     df = load_signals()
     updated = []
-    dropped = []
 
-    for _, row in df.iterrows():
+    # 📌 Работает только с активными сигналами
+    active_df = df[df["status"] == "active"]
+
+    for _, row in active_df.iterrows():
         ticker = row["ticker"]
         entry = row["price_entry"]
         max_profit = row["max_profit"]
@@ -487,6 +496,7 @@ def monitor_signals():
         message_id = int(row["message_id"])
 
         if datetime.now() - last_check < timedelta(days=10):
+            row["last_checked"] = datetime.now().strftime("%Y-%m-%d")
             updated.append(row)
             continue
 
@@ -494,7 +504,6 @@ def monitor_signals():
             price_now = yf.Ticker(ticker).history(period="1d")["Close"][-1]
             profit_pct = ((price_now - entry) / entry) * 100
 
-            # Обновляем дату проверки
             row["last_checked"] = datetime.now().strftime("%Y-%m-%d")
 
             # === Условие 1: Первая фиксация прибыли >20%
@@ -502,16 +511,15 @@ def monitor_signals():
                 forward = forward_telegram_message(SIGNAL_CHANNEL, message_id, NEWS_CHANNEL)
                 if forward:
                     forward_msg_id = forward["message_id"]
-                    news_reply = f"🎉 {ticker} вырос более чем на 20%!\n📈 Прибыль: {profit_pct:.2f}%\nПоздравляем всех, кто зашёл!"
+                    news_reply = f"🎉 {ticker} вырос более чем на 20%!\n📈 Прибыль: {profit_pct:.2f}%\nПоздравляем всех!"
                     send_telegram_message(news_reply, NEWS_CHANNEL, reply_to=forward_msg_id)
 
-                # Реплай в канал с сигналом
                 reply_signal = f"✅ {ticker} достиг цели +20%!\nТекущая прибыль: {profit_pct:.2f}%"
                 send_telegram_message(reply_signal, SIGNAL_CHANNEL, reply_to=message_id)
 
                 row["max_profit"] = profit_pct
 
-            # === Условие 2: Обновление максимума прибыли
+            # === Условие 2: Новый максимум
             elif profit_pct > max_profit:
                 forward = forward_telegram_message(SIGNAL_CHANNEL, message_id, NEWS_CHANNEL)
                 if forward:
@@ -519,17 +527,15 @@ def monitor_signals():
                     news_reply = f"📈 {ticker} обновил максимум: +{profit_pct:.2f}%"
                     send_telegram_message(news_reply, NEWS_CHANNEL, reply_to=forward_msg_id)
 
-                # Реплай в канал с сигналом
                 reply_signal = f"📈 Новый максимум прибыли по {ticker}: +{profit_pct:.2f}%"
                 send_telegram_message(reply_signal, SIGNAL_CHANNEL, reply_to=message_id)
 
                 row["max_profit"] = profit_pct
 
-            # === Условие 3: Прибыль падает → удалить
+            # === Условие 3: Прибыль падает → статус closed
             elif profit_pct < max_profit:
-                print(f"🗑 {ticker} удалён — прибыль упала")
-                dropped.append(ticker)
-                continue
+                print(f"🛑 {ticker} — прибыль упала, переводим в closed")
+                row["status"] = "closed"
 
             updated.append(row)
 
@@ -537,7 +543,11 @@ def monitor_signals():
             print(f"⚠️ Ошибка по {ticker}: {e}")
             updated.append(row)
 
-    save_signals(pd.DataFrame(updated))
+    # Объединяем с неактивными сигналами, чтобы сохранить историю
+    closed_df = df[df["status"] == "closed"]
+    final_df = pd.concat([pd.DataFrame(updated), closed_df], ignore_index=True)
+
+    save_signals(final_df)
 
     if dropped:
         drop_from_csv(STOCK_FILE, dropped)
