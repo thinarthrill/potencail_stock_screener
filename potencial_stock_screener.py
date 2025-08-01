@@ -329,6 +329,13 @@ else:
 
 import uuid
 
+def get_market_cap(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        return info.get("marketCap", None)
+    except:
+        return None
+
 # === Telegram отправка
 def send_telegram_message(text, chat_id, reply_to=None):
     payload = {
@@ -374,7 +381,13 @@ def save_signals(df):
     upload_to_gcs(SIGNALS_FILE, BUCKET, SIGNALS_FILE)
 
 # === Отправка сигналов
-def compute_signals(df, window_days=5, min_vol=1000, min_oi=500, min_ratio=2):
+def compute_signals(df, window_days=5, min_ratio=1.5, min_call_growth_pct=25):
+    """
+    df                — DataFrame с историей опционов
+    window_days       — за сколько последних дней анализируем
+    min_ratio         — минимальное отношение Call/Put в последний день
+    min_call_growth_pct — минимальный рост call_open_interest в % за период
+    """
     signals = []
     tickers = df["ticker"].unique()
 
@@ -392,19 +405,44 @@ def compute_signals(df, window_days=5, min_vol=1000, min_oi=500, min_ratio=2):
         puts = df_t["put_open_interest"].values
         ratios = [c/p if p > 0 else float('inf') for c, p in zip(calls, puts)]
 
-        if (
-            volumes[-1] > volumes[0] and
-            calls[-1] > calls[0] and
-            ratios[-1] > min_ratio and
-            volumes[-1] > min_vol and
-            calls[-1] > min_oi
-        ):
-            signals.append({
-                "ticker": ticker,
-                "volume_trend": f"{int(volumes[0])} → {int(volumes[-1])}",
-                "oi_trend": f"{int(calls[0])} → {int(calls[-1])}",
-                "ratio": round(ratios[-1], 2)
-            })
+        # === 1. Проверка, что рост объёмов и OI идёт каждый день
+        vol_growth_daily = all(volumes[i] >= volumes[i-1] for i in range(1, len(volumes)))
+        call_growth_daily = all(calls[i] >= calls[i-1] for i in range(1, len(calls)))
+
+        if not vol_growth_daily or not call_growth_daily:
+            continue  # нет устойчивого роста
+
+        # === 2. Проверка роста по коллам в %
+        call_growth_pct = ((calls[-1] - calls[0]) / calls[0]) * 100 if calls[0] > 0 else 0
+        if call_growth_pct < min_call_growth_pct:
+            continue
+
+        # === 3. Динамические пороги по объёму и OI в зависимости от капитализации
+        market_cap = get_market_cap(ticker)  # функция, которую нужно добавить
+        if market_cap is None:
+            continue
+
+        # Порог = % от капитализации (можно калибровать)
+        vol_threshold = max(500, market_cap * 0.00001)  # 0.001% от капа, но не меньше 500
+        oi_threshold = max(250, market_cap * 0.000005)  # 0.0005% от капа, но не меньше 250
+
+        if volumes[-1] < vol_threshold or calls[-1] < oi_threshold:
+            continue
+
+        # === 4. Фильтр по Call/Put
+        if ratios[-1] <= min_ratio:
+            continue
+
+        # Если все условия пройдены — сигнал
+        signals.append({
+            "ticker": ticker,
+            "volume_trend": f"{int(volumes[0])} → {int(volumes[-1])}",
+            "oi_trend": f"{int(calls[0])} → {int(calls[-1])}",
+            "call_growth_pct": round(call_growth_pct, 2),
+            "ratio": round(ratios[-1], 2),
+            "vol_threshold": int(vol_threshold),
+            "oi_threshold": int(oi_threshold)
+        })
 
     return signals
 
@@ -432,7 +470,11 @@ def send_signals():
                 print(f"⏩ Уже отправлен ранее: {ticker}")
                 continue
 
-            entry_price = yf.Ticker(ticker).history(period="1d")["Close"][-1]
+            hist = yf.Ticker(ticker).history(period="1d")
+            if hist.empty:
+                continue
+            entry_price = hist["Close"].iloc[-1]  # цена сегодня при генерации сигнала
+
             signal_id = str(uuid.uuid4())[:8]
             today = datetime.now().strftime("%Y-%m-%d")
             url = f"https://t.me/{SIGNAL_CHANNEL.strip('@')}"  # можно заменить на ссылку на конкретный пост
@@ -574,6 +616,6 @@ def monitor_signals():
 send_signals()
 monitor_signals()
 
-print("🎯 DONE ver. 2")
+print("🎯 DONE ver. 3")
 
 
